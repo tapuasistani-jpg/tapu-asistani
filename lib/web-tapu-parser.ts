@@ -43,7 +43,7 @@ function parseDateYevmiye(chunk: string): {
 }
 
 function temizSbiAciklama(chunk: string): string {
-  let aciklama = chunk
+  const aciklama = chunk
     .replace(/^(Beyan|Şerh|Serh|İrtifak)\s*/i, "")
     .replace(/\(?\s*Şablon:[^)]*\)?/gi, "")
     .replace(/\(?\s*Şablon:\s*3083\s+Sayılı\s+Kanunun\s+\d+\.?[^)]*/gi, "")
