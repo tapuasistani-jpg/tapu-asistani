@@ -42,33 +42,73 @@ function parseDateYevmiye(chunk: string): {
   };
 }
 
-function temizSbiAciklama(chunk: string): string {
-  const aciklama = chunk
-    .replace(/^(Beyan|Şerh|Serh|İrtifak)\s*/i, "")
-    .replace(/\(?\s*Şablon:[^)]*\)?/gi, "")
-    .replace(/\(?\s*Şablon:\s*3083\s+Sayılı\s+Kanunun\s+\d+\.?[^)]*/gi, "")
-    .replace(/3083\s+Sayılı\s+Kanunun\s+\d+\.\s*/gi, "")
+function extractLehtar(chunk: string): string {
+  const m = chunk.match(
+    /(?:SN:\d+\)\s*)((?:TARIM REFORMU|T\.?\s*C\.?\s*)?[A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜa-zçğıöşü\s]{4,80}?)(?=\s*VKN:|\s*Delice|\d{1,2}-\d{1,2}-\d{4})/i
+  );
+  const ad = m?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+  if (!ad || /^(Beyan|Şerh|Serh|İrtifak|Delice)$/i.test(ad)) return "";
+  if (/^\d+$/.test(ad)) return "";
+  return ad;
+}
+
+function temizSbiAciklama(chunk: string, lehtar = ""): string {
+  let text = chunk.replace(/^(Beyan|Şerh|Serh|İrtifak)\s*/i, "");
+
+  text = text
+    .replace(/\(\s*Şablon:[^)]*\)/gi, "")
+    .replace(/Şablon:\s*3083[\s\S]*?Maddesine\s+Göre\s+Belirtme\)?/gi, "")
     .replace(/Maddesine\s+Göre\s+Belirtme\)?/gi, "")
     .replace(/\(SN:\d+\)/g, "")
-    .replace(/Delice\s*-\s*/gi, "")
     .replace(/VKN:\s*\d*/gi, "")
-    .replace(/\d{1,2}-\d{1,2}-\d{4}[\s\S]*$/i, "")
+    .replace(/Delice\s*-\s*/gi, "")
+    .replace(/(?:-\s*)?\d{1,2}-\d{1,2}-\d{4}[\s\S]*$/i, "")
     .replace(/\(\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
-  return aciklama.replace(/\s+\d+\.\s*$/, "").trim();
+  if (lehtar) {
+    const esc = lehtar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text
+      .replace(new RegExp(`\\(SN:\\d+\\)\\s*${esc}`, "gi"), "")
+      .replace(new RegExp(esc, "gi"), "")
+      .trim();
+  }
+
+  return text
+    .replace(/\s+\d+\.\s*$/, "")
+    .replace(/\(\s*$/, "")
+    .replace(/ŞERH\s*\(\s*$/i, "ŞERH")
+    .trim();
 }
 
-function parseSbiChunk(chunk: string): HaneMaddesi | null {
+function parseSbiChunk(chunk: string, columnTip: string): HaneMaddesi | null {
   if (/AçıklamaMalik|Ş\/B\/İ|Terkin\s+Sebebi|Malik\/Lehtar/i.test(chunk)) {
     return null;
   }
 
+  if (/^ŞERH[\s(]/i.test(chunk) && !/^Şerh\s|^Serh\s/i.test(columnTip)) {
+    return null;
+  }
+
   const { tarih, yevmiye } = parseDateYevmiye(chunk);
-  const aciklama = temizSbiAciklama(chunk);
+  const lehtar = extractLehtar(chunk);
+  let aciklama = temizSbiAciklama(chunk, lehtar);
+
+  if (lehtar) {
+    aciklama = `${aciklama} (${lehtar} lehine)`.replace(/\s+/g, " ").trim();
+  }
 
   if (!aciklama || aciklama.length < 8) return null;
+
+  // Sadece kurum adı kalmış sahte şerh satırı
+  if (
+    sbiTipindenHane(columnTip) === "serh" &&
+    !/\d+\s*SAYILI|KANUN|BEYAN|İRTİFAK|ŞERH|HACİZ|İPOTEK/i.test(aciklama) &&
+    /MÜDÜRLÜĞÜ|BANKASI|A\.Ş\./i.test(aciklama)
+  ) {
+    return null;
+  }
 
   return { aciklama, tarih, yevmiye };
 }
@@ -85,7 +125,9 @@ function sbiTipindenHane(
 
 function extractSbiEntryChunks(body: string): string[] {
   const starts: number[] = [];
-  const re = /(?:^|[\s\n])(Beyan|Şerh|Serh|İrtifak)(?=[\dA-ZÇĞİÖŞÜ(])/gim;
+  // Yalnızca satır başındaki sütun tipi (GEREĞİNCE ŞERH metnini bölme)
+  const re =
+    /(?:^|\n)(Beyan(?=\d|\s)|Şerh(?=\s)|Serh(?=\s)|İrtifak(?=\s))/g;
 
   for (const m of body.matchAll(re)) {
     const idx = m.index ?? 0;
@@ -93,10 +135,12 @@ function extractSbiEntryChunks(body: string): string[] {
     starts.push(idx + offset);
   }
 
+  const unique = [...new Set(starts)].sort((a, b) => a - b);
+
   const chunks: string[] = [];
-  for (let i = 0; i < starts.length; i++) {
-    const end = i + 1 < starts.length ? starts[i + 1] : body.length;
-    const piece = body.slice(starts[i], end).trim();
+  for (let i = 0; i < unique.length; i++) {
+    const end = i + 1 < unique.length ? unique[i + 1] : body.length;
+    const piece = body.slice(unique[i], end).trim();
     if (piece.length > 12) chunks.push(piece);
   }
 
@@ -127,7 +171,7 @@ export function parseWebTapuSbi(metin: string): {
     const typeMatch = chunk.match(/^(Beyan|Şerh|Serh|İrtifak)/i);
     if (!typeMatch) continue;
 
-    const madde = parseSbiChunk(chunk);
+    const madde = parseSbiChunk(chunk, typeMatch[1]);
     if (!madde) continue;
 
     const hane = sbiTipindenHane(typeMatch[1]);
