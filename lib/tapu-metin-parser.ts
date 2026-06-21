@@ -187,6 +187,7 @@ function extractKurum(metin: string): string {
     if (m?.[1]) {
       return m[1]
         .trim()
+        .replace(/^T\.?\s*C\.?\s*/i, "")
         .replace(/\s*\(VKN:\s*\d+\)\s*/gi, "")
         .replace(/\s+/g, " ")
         .trim();
@@ -196,42 +197,61 @@ function extractKurum(metin: string): string {
 }
 
 function extractTutar(metin: string): string {
-  const labeled = [
-    ...metin.matchAll(
-      /(?:miktar|bedel|tutar|ipotek\s+tutar[ıi])[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)\s*TL/gi
-    ),
-    ...metin.matchAll(
-      /(\d{1,3}(?:\.\d{3})+(?:,\d{2})?)\s*TL/gi
-    ),
-    ...metin.matchAll(/(\d+(?:,\d{2})?)\s*TL/gi),
-  ];
+  const candidates: { raw: string; value: number }[] = [];
 
-  let bestRaw = "";
-  let bestValue = 0;
-
+  const labeled = metin.matchAll(
+    /(?:miktar[ıi]|bedel|tutar|ipotek\s+tutar[ıi]|kredi\s+tutar[ıi])[:\s]*([\d.,\s]+?)(?:\s*TL|\b|$|\s+\d{1,2}[./-])/gi
+  );
   for (const m of labeled) {
-    const raw = m[1];
-    if (!isMeaningfulTutar(`${raw} TL`)) continue;
+    const raw = m[1].replace(/\s/g, "").trim();
     const value = parseTlNumeric(raw);
-    if (value > bestValue) {
-      bestValue = value;
-      bestRaw = raw;
-    }
+    if (value >= 100) candidates.push({ raw, value });
   }
 
-  return bestRaw ? `${bestRaw} TL` : "";
+  const withTl = metin.matchAll(
+    /(\d{1,3}(?:\.\d{3})+(?:,\d{2})?|\d+(?:,\d{2})?)\s*TL/gi
+  );
+  for (const m of withTl) {
+    const raw = m[1];
+    const value = parseTlNumeric(raw);
+    if (value >= 100) candidates.push({ raw, value });
+  }
+
+  // Web Tapu: 750.000,00 veya 750000,00 (TL yazılmaz)
+  const turkishAmount = metin.matchAll(
+    /\b(\d{1,3}(?:\.\d{3})+(?:,\d{2})?)\b/g
+  );
+  for (const m of turkishAmount) {
+    const value = parseTlNumeric(m[1]);
+    if (value >= 100) candidates.push({ raw: m[1], value });
+  }
+
+  const plainAmount = metin.matchAll(/\b(\d{4,}(?:,\d{2})?)\b/g);
+  for (const m of plainAmount) {
+    const value = parseTlNumeric(m[1]);
+    if (value >= 1000) candidates.push({ raw: m[1], value });
+  }
+
+  if (candidates.length === 0) return "";
+
+  const best = candidates.reduce((a, b) => (b.value > a.value ? b : a));
+  return `${best.raw} TL`;
 }
 
 function extractDerece(metin: string): string {
   const patterns: RegExp[] = [
     /(\d+)\s*[./]\s*(\d+)\s*(?:\.?\s*)?(?:derece|DERECE)/i,
     /(\d+)\s*[./]\s*(\d+)\s*dereceden/i,
+    /(?:derece\s*\/?\s*s[ıi]ra)[:\s]*(\d+)\s*[/.\s-]+\s*(\d+)/i,
     /(\d+)\s*\.\s*Derece\s*(\d+)\s*\.\s*S[ıi]ra/i,
     /(\d+)\s*\.\s*derece\s*(\d+)\s*\.\s*s[ıi]ra/i,
     /derece[:\s]*(\d+)[^\d]{0,24}s[ıi]ra[:\s]*(\d+)/i,
     /lehine[:\s]+(\d+)\s*[./]\s*(\d+)/i,
     /(\d+)\s*inci\s*derece\s*(\d+)\s*inci\s*s[ıi]ra/i,
     /(?:ipotek|rehin)\s+derecesi[:\s]*(\d+)\s*[./]?\s*(\d+)?/i,
+    // Web Tapu tablo: "1 1 750000,00" — derece ve sıra bitişik
+    /(?:lehine|bankas[ıi]|a\.ş\.)\s+(\d{1,2})\s+(\d{1,2})\s+(?:\d{4,}|\d{1,3}(?:\.\d{3})+)/i,
+    /(\d{1,2})\s+(\d{1,2})\s+(?:\d{4,}(?:,\d{2})?|\d{1,3}(?:\.\d{3})+(?:,\d{2})?)/,
     /(\d+)\s*dereceden/i,
     /(\d+)\s*\.\s*derece/i,
   ];
@@ -246,7 +266,41 @@ function extractDerece(metin: string): string {
   return "";
 }
 
+function extractYevmiyeNearDate(flat: string, tarihRaw: string, tarihNorm: string): string {
+  const variants = [
+    tarihRaw,
+    tarihNorm,
+    tarihRaw.replace(/\./g, "/"),
+    tarihRaw.replace(/\./g, "-"),
+  ];
+
+  for (const variant of variants) {
+    const idx = flat.indexOf(variant);
+    if (idx === -1) continue;
+
+    const after = flat.slice(idx + variant.length, idx + variant.length + 80);
+    const afterPatterns = [
+      /^\s*,?\s*(\d{2,8})\s*(?:yevmiye|yevmiyeli|yev\b)/i,
+      /^\s*,?\s*yevmiye\s*(?:no|numarası|numarasi)?[:\s]*(\d{2,8})/i,
+      /^\s*,?\s*(\d{3,8})\b/,
+    ];
+    for (const p of afterPatterns) {
+      const m = after.match(p);
+      if (m?.[1]) return m[1].trim();
+    }
+
+    const before = flat.slice(Math.max(0, idx - 50), idx);
+    const beforeMatch = before.match(/(\d{3,8})\s*$/);
+    if (beforeMatch?.[1]) return beforeMatch[1].trim();
+  }
+
+  return "";
+}
+
 function yevmiyeTarihEslestir(metin: string, tarih: string): string {
+  const nearDate = extractYevmiyeNearDate(metin, tarih, tarih);
+  if (nearDate) return nearDate;
+
   const direct = extractYevmiye(metin);
   if (direct) return direct;
 
@@ -324,47 +378,122 @@ function dedupeRehin(entries: RehinKaydi[]): RehinKaydi[] {
   return result;
 }
 
+function isRehinDateContext(block: string): boolean {
+  return /(?:bank|bankas[ıi]|lehine|ipotek|rehin|ziraat|a\.ş\.|miktar|derece)/i.test(
+    block
+  );
+}
+
+/** Her ipotek kaydını tesis tarihine göre ayırır (aynı banka çoklu kayıt) */
+function parseRehinSectionByDateAnchors(sectionText: string): RehinKaydi[] {
+  const flat = normalizeRehinMetin(trimSectionTail(sectionText));
+  if (!flat || KAYIT_YOK.test(flat)) return [];
+
+  const dateRegex = /\b(\d{1,2}[./-]\d{1,2}[./-]\d{4})\b/g;
+  const dateMatches: { raw: string; norm: string; index: number }[] = [];
+
+  for (const m of flat.matchAll(dateRegex)) {
+    dateMatches.push({
+      raw: m[1],
+      norm: normalizeTarih(m[1]),
+      index: m.index ?? 0,
+    });
+  }
+
+  const entries: RehinKaydi[] = [];
+
+  for (let i = 0; i < dateMatches.length; i++) {
+    const dm = dateMatches[i];
+    let start = Math.max(0, dm.index - 220);
+
+    if (i > 0) {
+      const prev = dateMatches[i - 1];
+      const afterPrev = flat.slice(prev.index);
+      const recordEnd = afterPrev.match(
+        /\d{1,2}[./-]\d{1,2}[./-]\d{4}[\s\S]{0,100}?(?:yevmiyeli|yevmiye|ipotek|rehin)/i
+      );
+      if (recordEnd) {
+        start = prev.index + recordEnd[0].length;
+      } else {
+        start = Math.max(prev.index + prev.raw.length, dm.index - 220);
+      }
+    }
+
+    const end = Math.min(flat.length, dm.index + 90);
+    const block = flat.slice(start, end);
+
+    if (!isRehinDateContext(block)) continue;
+
+    const kurum = extractKurum(block);
+    const derece = extractDerece(block);
+    const tutar = extractTutar(block);
+    const yevmiye =
+      extractYevmiyeNearDate(block, dm.raw, dm.norm) ||
+      yevmiyeTarihEslestir(block, dm.norm);
+
+    if (!kurum && !tutar && !derece) continue;
+
+    entries.push({
+      kurum: kurum || "…………",
+      derece,
+      tutar,
+      tarih: dm.norm,
+      yevmiye,
+    });
+  }
+
+  return dedupeRehin(entries);
+}
+
 function splitRehinBlocks(sectionText: string): string[] {
   const normalized = trimSectionTail(normalizeMetin(sectionText));
   if (!normalized || KAYIT_YOK.test(normalized)) return [];
 
   const flat = normalizeRehinMetin(normalized);
 
-  const byBank = flat
-    .split(/(?=(?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ)/i)
-    .map((b) => b.trim())
-    .filter((b) => b.length > 15 && /(?:TL|ipotek|rehin|derece|lehine)/i.test(b));
-  if (byBank.length > 1) return byBank;
-
-  const byLehine = flat
-    .split(/(?=\blehine\b)/i)
-    .map((b) => b.trim())
-    .filter((b) => b.length > 15 && /TL/i.test(b));
-  if (byLehine.length > 1) {
-    return byLehine.map((b, i) => (i === 0 ? b : b.replace(/^lehine\s*/i, "")));
-  }
-
   const byDate = flat
     .split(
       /(?=\d{1,2}[./-]\d{1,2}[./-]\d{4}(?:\s+tarih|\s*,|\s+yevmiye|\s+tesis)?)/i
     )
     .map((b) => b.trim())
-    .filter((b) => b.length > 15 && /TL/i.test(b));
+    .filter(
+      (b) =>
+        b.length > 12 &&
+        isRehinDateContext(b) &&
+        /\d{1,2}[./-]\d{1,2}[./-]\d{4}/.test(b)
+    );
   if (byDate.length > 1) return byDate;
 
-  if (/ipotek|rehin|banka|TL/i.test(flat)) {
+  const byBank = flat
+    .split(/(?=(?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ)/i)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 15 && isRehinDateContext(b));
+  if (byBank.length > 1) return byBank;
+
+  const byLehine = flat
+    .split(/(?=\blehine\b)/i)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 15 && isRehinDateContext(b));
+  if (byLehine.length > 1) {
+    return byLehine.map((b, i) => (i === 0 ? b : b.replace(/^lehine\s*/i, "")));
+  }
+
+  if (/ipotek|rehin|banka|lehine/i.test(flat)) {
     return [flat];
   }
 
   return [];
 }
 
-function parseRehinBlock(block: string): RehinKaydi | null {
+function parseRehinBlock(block: string, anchorTarih?: string): RehinKaydi | null {
   const flat = normalizeRehinMetin(trimSectionTail(block));
   const kurum = extractKurum(flat);
   const tutar = extractTutar(flat);
-  const tarih = extractTarih(flat);
-  const yevmiye = yevmiyeTarihEslestir(flat, tarih);
+  const tarih = anchorTarih ? normalizeTarih(anchorTarih) : extractTarih(flat);
+  const tarihRaw = anchorTarih ?? tarih;
+  const yevmiye =
+    extractYevmiyeNearDate(flat, tarihRaw, tarih) ||
+    yevmiyeTarihEslestir(flat, tarih);
   const derece = extractDerece(flat);
 
   if (!kurum && !tutar && !/ipotek|rehin|lehine/i.test(flat)) return null;
@@ -414,9 +543,14 @@ function extractRehinEntries(sectionText: string): RehinKaydi[] {
 }
 
 function parseRehinSection(sectionText: string): RehinKaydi[] {
+  const byAnchors = parseRehinSectionByDateAnchors(sectionText);
+  if (byAnchors.length > 0) return byAnchors;
+
   const blocks = splitRehinBlocks(sectionText);
   const fromBlocks = dedupeRehin(
-    blocks.map(parseRehinBlock).filter((r): r is RehinKaydi => r !== null)
+    blocks
+      .map((b) => parseRehinBlock(b))
+      .filter((r): r is RehinKaydi => r !== null)
   );
   if (fromBlocks.length > 0) return fromBlocks;
 
