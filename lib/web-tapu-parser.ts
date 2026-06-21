@@ -42,29 +42,65 @@ function parseDateYevmiye(chunk: string): {
   };
 }
 
+function temizSbiAciklama(chunk: string): string {
+  let aciklama = chunk
+    .replace(/^(Beyan|Şerh|Serh|İrtifak)\s*/i, "")
+    .replace(/\(?\s*Şablon:[^)]*\)?/gi, "")
+    .replace(/\(?\s*Şablon:\s*3083\s+Sayılı\s+Kanunun\s+\d+\.?[^)]*/gi, "")
+    .replace(/3083\s+Sayılı\s+Kanunun\s+\d+\.\s*/gi, "")
+    .replace(/Maddesine\s+Göre\s+Belirtme\)?/gi, "")
+    .replace(/\(SN:\d+\)/g, "")
+    .replace(/Delice\s*-\s*/gi, "")
+    .replace(/VKN:\s*\d*/gi, "")
+    .replace(/\d{1,2}-\d{1,2}-\d{4}[\s\S]*$/i, "")
+    .replace(/\(\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return aciklama.replace(/\s+\d+\.\s*$/, "").trim();
+}
+
 function parseSbiChunk(chunk: string): HaneMaddesi | null {
   if (/AçıklamaMalik|Ş\/B\/İ|Terkin\s+Sebebi|Malik\/Lehtar/i.test(chunk)) {
     return null;
   }
 
   const { tarih, yevmiye } = parseDateYevmiye(chunk);
-
-  let aciklama = chunk
-    .replace(/^(Beyan|Şerh|Serh|İrtifak)\s*/i, "")
-    .replace(/\(Şablon:[^)]*\)/gi, "")
-    .replace(/Maddesine\s+Göre\s+Belirtme\)?/gi, "")
-    .replace(/\(SN:\d+\)/g, "")
-    .replace(/Delice\s*-\s*/gi, "")
-    .replace(/VKN:\s*\d*/gi, "")
-    .replace(/\d{1,2}-\d{1,2}-\d{4}[\s\S]*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  aciklama = aciklama.replace(/\s+\d+\.\s*$/, "").trim();
+  const aciklama = temizSbiAciklama(chunk);
 
   if (!aciklama || aciklama.length < 8) return null;
 
   return { aciklama, tarih, yevmiye };
+}
+
+/** Web Tapu tablosunda Ş/B/İ sütun tipine göre ayır (içerikte "ŞERH" geçse bile Beyan kalır) */
+function sbiTipindenHane(
+  tip: string
+): "beyan" | "serh" | "hak" {
+  const t = tip.toLowerCase();
+  if (t.startsWith("beyan")) return "beyan";
+  if (t.startsWith("şerh") || t.startsWith("serh")) return "serh";
+  return "hak";
+}
+
+function extractSbiEntryChunks(body: string): string[] {
+  const starts: number[] = [];
+  const re = /(?:^|[\s\n])(Beyan|Şerh|Serh|İrtifak)(?=[\dA-ZÇĞİÖŞÜ(])/gim;
+
+  for (const m of body.matchAll(re)) {
+    const idx = m.index ?? 0;
+    const offset = m[0].length - m[1].length;
+    starts.push(idx + offset);
+  }
+
+  const chunks: string[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1] : body.length;
+    const piece = body.slice(starts[i], end).trim();
+    if (piece.length > 12) chunks.push(piece);
+  }
+
+  return chunks;
 }
 
 export function parseWebTapuSbi(metin: string): {
@@ -85,10 +121,7 @@ export function parseWebTapuSbi(metin: string): {
     };
   }
 
-  const chunks = match[1]
-    .split(/(?=(?:^|\n)(?:Beyan|Şerh|Serh|İrtifak))/im)
-    .map((c) => c.trim())
-    .filter((c) => c.length > 12);
+  const chunks = extractSbiEntryChunks(match[1]);
 
   for (const chunk of chunks) {
     const typeMatch = chunk.match(/^(Beyan|Şerh|Serh|İrtifak)/i);
@@ -97,15 +130,9 @@ export function parseWebTapuSbi(metin: string): {
     const madde = parseSbiChunk(chunk);
     if (!madde) continue;
 
-    const upper = chunk.toUpperCase();
-    const isSerh =
-      /^ŞERH|^SERH|^İRTİFAK/i.test(typeMatch[1]) ||
-      /ŞERH|3083\s+SAYILI\s+KANUN\s+GEREĞİNCE\s+ŞERH|TARIM REFORMU/i.test(
-        upper
-      );
-
-    if (isSerh) serh.push(madde);
-    else if (/^BEYAN/i.test(typeMatch[1])) beyan.push(madde);
+    const hane = sbiTipindenHane(typeMatch[1]);
+    if (hane === "beyan") beyan.push(madde);
+    else if (hane === "serh") serh.push(madde);
     else hak.push(madde);
   }
 
@@ -165,21 +192,29 @@ export function extractWebTapuBelgeTarihSaat(metin: string): {
   tarih: string;
   saat: string;
 } {
-  const sbi = metin.match(WEB_TAPU_SBI);
-  if (sbi) {
-    const m = sbi[1].match(
-      /(\d{1,2}-\d{1,2}-\d{4})\s+(\d{1,2}:\d{2})\s*-\s*\d+/
-    );
-    if (m) {
-      return { tarih: normalizeTarih(m[1]), saat: m[2] };
-    }
+  const all = [
+    ...metin.matchAll(
+      /(\d{1,2}-\d{1,2}-\d{4})\s+(\d{1,2}:\d{2})\s*-\s*\d+/g
+    ),
+  ];
+
+  const sorguSaati =
+    all.find((m) => m[2] !== "00:00") ??
+    all.find((m) => m[2] === "00:00");
+
+  if (sorguSaati) {
+    return {
+      tarih: normalizeTarih(sorguSaati[1]),
+      saat: sorguSaati[2],
+    };
   }
 
-  const fallback = metin.match(
-    /(\d{1,2}-\d{1,2}-\d{4})\s+(\d{1,2}:\d{2})\s*-\s*\d+/
-  );
-  if (fallback) {
-    return { tarih: normalizeTarih(fallback[1]), saat: fallback[2] };
+  const sbi = metin.match(WEB_TAPU_SBI);
+  if (sbi) {
+    const m = sbi[1].match(/(\d{1,2}-\d{1,2}-\d{4})\s*-\s*(\d+)/);
+    if (m) {
+      return { tarih: normalizeTarih(m[1]), saat: "" };
+    }
   }
 
   return { tarih: "", saat: "" };
