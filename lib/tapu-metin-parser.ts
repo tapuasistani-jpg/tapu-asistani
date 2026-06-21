@@ -49,6 +49,33 @@ function flattenMetin(metin: string): string {
   return normalizeMetin(metin).replace(/\n+/g, " ");
 }
 
+/** PDF metnindeki boşluk/kırılma hatalarını düzeltir */
+function normalizeRehinMetin(metin: string): string {
+  return flattenMetin(metin)
+    .replace(/(\d)\s+\.\s+(\d)/g, "$1.$2")
+    .replace(/(\d)\s*\/\s*(\d)/g, "$1/$2")
+    .replace(/(\d)\s*,\s*(\d{2})\s*TL/gi, "$1,$2 TL")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseTlNumeric(raw: string): number {
+  const s = raw.trim();
+  if (!s) return 0;
+  if (s.includes(".") && s.includes(",")) {
+    return parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
+  }
+  if (s.includes(",") && !s.includes(".")) {
+    return parseFloat(s.replace(",", ".")) || 0;
+  }
+  return parseFloat(s.replace(/[^\d.]/g, "")) || 0;
+}
+
+function isMeaningfulTutar(raw: string): boolean {
+  const value = parseTlNumeric(raw.replace(/\s*TL/i, ""));
+  return value >= 100;
+}
+
 function extractBelgeTarihSaat(metin: string): { tarih: string; saat: string } {
   const flat = flattenMetin(metin);
   const patterns = [
@@ -106,11 +133,13 @@ function splitSections(metin: string): Record<SectionKey, string> {
 
 function extractYevmiye(metin: string): string {
   const patterns = [
-    /yevmiye\s*(?:no|numarası|numarasi)?[:\s]*(\d{3,8})/i,
-    /yev\.?\s*no[:\s]*(\d{3,8})/i,
-    /(\d{3,8})\s*yevmiyeli/i,
-    /tarih,?\s*(\d{3,8})\s*yevmiyeli/i,
-    /yevmiye[:\s-]*(\d{3,8})/i,
+    /yevmiye\s*(?:no|numarası|numarasi|numarası)?[:\s]*(\d{2,8})/i,
+    /yev\.?\s*no[:\s]*(\d{2,8})/i,
+    /tarih,?\s*(\d{2,8})\s*yevmiyeli/i,
+    /(\d{2,8})\s*yevmiyeli/i,
+    /(\d{2,8})\s*yevmiye(?:li|si|no)?/i,
+    /yevmiye[:\s-]*(\d{2,8})/i,
+    /tesis\s+tarihi[:\s]*\d{1,2}[./-]\d{1,2}[./-]\d{4}[^\d]{0,60}(\d{2,8})/i,
   ];
 
   for (const p of patterns) {
@@ -148,8 +177,9 @@ function extractKurum(metin: string): string {
   const patterns = [
     /((?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ\s+[\wçğıöşüÇĞİÖŞÜ\s.]+A\.Ş\.(?:\s*\(VKN:\s*\d+\))?)/i,
     /((?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ\s+[\wçğıöşüÇĞİÖŞÜ\s.]+BANKASI(?:\s*\(VKN:\s*\d+\))?)/i,
+    /((?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ\s+[\wçğıöşüÇĞİÖŞÜ\s.]+BANKASI\s+A\.Ş\.)/i,
+    /((?:T\.?\s*C\.?\s*)?[A-ZÇĞİÖŞÜ][A-Za-zçğıöşüÇĞİÖŞÜ0-9\s.]{3,80}BANKASI(?:\s+A\.Ş\.)?(?:\s*\([^)]{0,40}\))?)/i,
     /([A-ZÇĞİÖŞÜ][A-Za-zçğıöşüÇĞİÖŞÜ0-9\s.]{4,80}A\.Ş\.(?:\s*\([^)]{0,40}\))?)/,
-    /([A-ZÇĞİÖŞÜ][A-Za-zçğıöşüÇĞİÖŞÜ0-9\s.]{4,80}BANKASI(?:\s*\([^)]{0,40}\))?)/i,
   ];
 
   for (const p of patterns) {
@@ -158,6 +188,7 @@ function extractKurum(metin: string): string {
       return m[1]
         .trim()
         .replace(/\s*\(VKN:\s*\d+\)\s*/gi, "")
+        .replace(/\s+/g, " ")
         .trim();
     }
   }
@@ -165,27 +196,52 @@ function extractKurum(metin: string): string {
 }
 
 function extractTutar(metin: string): string {
-  const m = metin.match(/(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*TL/i);
-  if (!m) return "";
-  return `${m[1]} TL`;
+  const labeled = [
+    ...metin.matchAll(
+      /(?:miktar|bedel|tutar|ipotek\s+tutar[ıi])[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d+(?:,\d{2})?)\s*TL/gi
+    ),
+    ...metin.matchAll(
+      /(\d{1,3}(?:\.\d{3})+(?:,\d{2})?)\s*TL/gi
+    ),
+    ...metin.matchAll(/(\d+(?:,\d{2})?)\s*TL/gi),
+  ];
+
+  let bestRaw = "";
+  let bestValue = 0;
+
+  for (const m of labeled) {
+    const raw = m[1];
+    if (!isMeaningfulTutar(`${raw} TL`)) continue;
+    const value = parseTlNumeric(raw);
+    if (value > bestValue) {
+      bestValue = value;
+      bestRaw = raw;
+    }
+  }
+
+  return bestRaw ? `${bestRaw} TL` : "";
 }
 
 function extractDerece(metin: string): string {
-  const labeled = metin.match(
-    /derece[:\s]*(\d+)[^\d]{0,24}s[ıi]ra[:\s]*(\d+)/i
-  );
-  if (labeled) return `${labeled[1]}/${labeled[2]}`;
+  const patterns: RegExp[] = [
+    /(\d+)\s*[./]\s*(\d+)\s*(?:\.?\s*)?(?:derece|DERECE)/i,
+    /(\d+)\s*[./]\s*(\d+)\s*dereceden/i,
+    /(\d+)\s*\.\s*Derece\s*(\d+)\s*\.\s*S[ıi]ra/i,
+    /(\d+)\s*\.\s*derece\s*(\d+)\s*\.\s*s[ıi]ra/i,
+    /derece[:\s]*(\d+)[^\d]{0,24}s[ıi]ra[:\s]*(\d+)/i,
+    /lehine[:\s]+(\d+)\s*[./]\s*(\d+)/i,
+    /(\d+)\s*inci\s*derece\s*(\d+)\s*inci\s*s[ıi]ra/i,
+    /(?:ipotek|rehin)\s+derecesi[:\s]*(\d+)\s*[./]?\s*(\d+)?/i,
+    /(\d+)\s*dereceden/i,
+    /(\d+)\s*\.\s*derece/i,
+  ];
 
-  const ipotekDerece = metin.match(
-    /(?:ipotek|rehin)\s+derecesi[:\s]*(\d+)/i
-  );
-  if (ipotekDerece) return `${ipotekDerece[1]}/0`;
-
-  const dereceden = metin.match(/(\d+\/\d+)\s+dereceden/i);
-  if (dereceden) return dereceden[1];
-
-  const sadeceDerece = metin.match(/(\d+)\s*\.\s*derece/i);
-  if (sadeceDerece) return `${sadeceDerece[1]}/0`;
+  for (const p of patterns) {
+    const m = metin.match(p);
+    if (!m?.[1]) continue;
+    if (m[2]) return `${m[1]}/${m[2]}`;
+    return `${m[1]}/1`;
+  }
 
   return "";
 }
@@ -197,19 +253,19 @@ function yevmiyeTarihEslestir(metin: string, tarih: string): string {
   if (!tarih) return "";
 
   const escaped = tarih.replace(/\./g, "\\.");
-  const near = new RegExp(
-    `${escaped}[^\\d]{0,120}?(\\d{3,8})(?:\\s|$|[^\\d.,])`,
-    "i"
-  );
-  const m = metin.match(near);
-  if (m?.[1]) return m[1];
+  const nearPatterns = [
+    new RegExp(`${escaped}[^\\d]{0,160}?(\\d{2,8})\\s*yevmiyeli`, "i"),
+    new RegExp(`${escaped}[^\\d]{0,160}?yevmiye[^\\d]{0,20}(\\d{2,8})`, "i"),
+    new RegExp(`${escaped}[^\\d]{0,120}?(\\d{2,8})(?:\\s|$|[^\\d.,])`, "i"),
+    new RegExp(`(\\d{2,8})[^\\d]{0,80}?${escaped}`, "i"),
+  ];
 
-  const before = new RegExp(
-    `(\\d{3,8})[^\\d]{0,80}?${escaped}`,
-    "i"
-  );
-  const m2 = metin.match(before);
-  return m2?.[1]?.trim() ?? "";
+  for (const p of nearPatterns) {
+    const m = metin.match(p);
+    if (m?.[1] && m[1].length >= 2) return m[1].trim();
+  }
+
+  return "";
 }
 
 function extractTarihYevmiye(metin: string): { tarih: string; yevmiye: string } {
@@ -268,82 +324,50 @@ function dedupeRehin(entries: RehinKaydi[]): RehinKaydi[] {
   return result;
 }
 
-function extractRehinEntries(sectionText: string): RehinKaydi[] {
-  const cleaned = trimSectionTail(sectionText);
-  const flat = flattenMetin(cleaned);
-  if (!flat || KAYIT_YOK.test(flat)) return [];
-
-  const entries: RehinKaydi[] = [];
-  const amountPattern = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*TL/gi;
-  const hits: number[] = [];
-
-  let m: RegExpExecArray | null;
-  while ((m = amountPattern.exec(flat)) !== null) {
-    hits.push(m.index);
-  }
-
-  if (hits.length === 0) {
-    const single = parseRehinBlock(cleaned);
-    return single ? [single] : [];
-  }
-
-  for (const idx of hits) {
-    const start = Math.max(0, idx - 280);
-    const end = Math.min(flat.length, idx + 100);
-    const window = flat.slice(start, end);
-
-    const kurum = extractKurum(window);
-    const tutar = extractTutar(window);
-    const tarih = extractTarih(window);
-    const yevmiye = yevmiyeTarihEslestir(window, tarih);
-    const derece = extractDerece(window);
-
-    if (!kurum && !tutar) continue;
-
-    entries.push({
-      kurum: kurum || "…………",
-      derece,
-      tutar,
-      tarih,
-      yevmiye,
-    });
-  }
-
-  return dedupeRehin(entries);
-}
-
 function splitRehinBlocks(sectionText: string): string[] {
   const normalized = trimSectionTail(normalizeMetin(sectionText));
   if (!normalized || KAYIT_YOK.test(normalized)) return [];
 
-  const byBank = normalized
+  const flat = normalizeRehinMetin(normalized);
+
+  const byBank = flat
     .split(/(?=(?:T\.?\s*C\.?\s*)?TÜRKİYE\s+CUMHURİYETİ)/i)
     .map((b) => b.trim())
-    .filter((b) => b.length > 20 && /TL/i.test(b));
+    .filter((b) => b.length > 15 && /(?:TL|ipotek|rehin|derece|lehine)/i.test(b));
   if (byBank.length > 1) return byBank;
 
-  const byAmount = normalized
-    .split(/(?=\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\s*TL\b)/i)
+  const byLehine = flat
+    .split(/(?=\blehine\b)/i)
     .map((b) => b.trim())
-    .filter((b) => b.length > 20 && /TL/i.test(b));
-  if (byAmount.length > 1) return byAmount;
+    .filter((b) => b.length > 15 && /TL/i.test(b));
+  if (byLehine.length > 1) {
+    return byLehine.map((b, i) => (i === 0 ? b : b.replace(/^lehine\s*/i, "")));
+  }
 
-  if (/ipotek|rehin|banka|TL/i.test(normalized)) {
-    return [normalized];
+  const byDate = flat
+    .split(
+      /(?=\d{1,2}[./-]\d{1,2}[./-]\d{4}(?:\s+tarih|\s*,|\s+yevmiye|\s+tesis)?)/i
+    )
+    .map((b) => b.trim())
+    .filter((b) => b.length > 15 && /TL/i.test(b));
+  if (byDate.length > 1) return byDate;
+
+  if (/ipotek|rehin|banka|TL/i.test(flat)) {
+    return [flat];
   }
 
   return [];
 }
 
 function parseRehinBlock(block: string): RehinKaydi | null {
-  const flat = flattenMetin(trimSectionTail(block));
+  const flat = normalizeRehinMetin(trimSectionTail(block));
   const kurum = extractKurum(flat);
   const tutar = extractTutar(flat);
   const tarih = extractTarih(flat);
   const yevmiye = yevmiyeTarihEslestir(flat, tarih);
   const derece = extractDerece(flat);
 
-  if (!kurum && !tutar && !/ipotek|rehin/i.test(flat)) return null;
+  if (!kurum && !tutar && !/ipotek|rehin|lehine/i.test(flat)) return null;
 
   return {
     kurum: kurum || "…………",
@@ -354,14 +378,49 @@ function parseRehinBlock(block: string): RehinKaydi | null {
   };
 }
 
-function parseRehinSection(sectionText: string): RehinKaydi[] {
-  const fromAmounts = extractRehinEntries(sectionText);
-  if (fromAmounts.length > 0) return fromAmounts;
+function extractRehinEntries(sectionText: string): RehinKaydi[] {
+  const cleaned = trimSectionTail(sectionText);
+  const flat = normalizeRehinMetin(cleaned);
+  if (!flat || KAYIT_YOK.test(flat)) return [];
 
+  const amountPattern =
+    /(\d{1,3}(?:\.\d{3})+(?:,\d{2})?|\d+(?:,\d{2})?)\s*TL/gi;
+  const hits: number[] = [];
+
+  let m: RegExpExecArray | null;
+  while ((m = amountPattern.exec(flat)) !== null) {
+    if (isMeaningfulTutar(`${m[1]} TL`)) {
+      hits.push(m.index);
+    }
+  }
+
+  if (hits.length === 0) {
+    const single = parseRehinBlock(cleaned);
+    return single ? [single] : [];
+  }
+
+  const entries: RehinKaydi[] = [];
+  for (const idx of hits) {
+    const start = Math.max(0, idx - 420);
+    const end = Math.min(flat.length, idx + 180);
+    const window = flat.slice(start, end);
+    const parsed = parseRehinBlock(window);
+    if (parsed && (parsed.kurum !== "…………" || parsed.tutar)) {
+      entries.push(parsed);
+    }
+  }
+
+  return dedupeRehin(entries);
+}
+
+function parseRehinSection(sectionText: string): RehinKaydi[] {
   const blocks = splitRehinBlocks(sectionText);
-  return dedupeRehin(
+  const fromBlocks = dedupeRehin(
     blocks.map(parseRehinBlock).filter((r): r is RehinKaydi => r !== null)
   );
+  if (fromBlocks.length > 0) return fromBlocks;
+
+  return extractRehinEntries(sectionText);
 }
 
 export function parseTapuMetni(metin: string): TapuCikarimVerisi {
