@@ -1,9 +1,21 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+function getWorkerSrc(): string {
+  return pathToFileURL(
+    path.join(
+      process.cwd(),
+      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    )
+  ).href;
+}
 
 export async function extractTextFromPdfBuffer(
   buffer: Buffer
 ): Promise<string> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = getWorkerSrc();
 
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
