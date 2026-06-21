@@ -31,26 +31,28 @@ export default function TekliTapuAnalizi() {
     }
 
     setFileName(file.name);
-    setLoading(true);
     setError(null);
     setSonuc(null);
+    setLoading(true);
 
     try {
-      const analiz = await analyzeTapuPdf(file);
-      setSonuc(analiz);
+      const res = await analyzeTapuPdf(file);
+      setSonuc(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Analiz başarısız.");
+      setError(
+        err instanceof Error ? err.message : "Analiz sırasında bir hata oluştu."
+      );
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900">
           <Upload className="h-5 w-5 text-brand-600" />
-          Tapu PDF Yükle
+          Tapu PDF Yükleme
         </h2>
         <div
           role="button"
@@ -65,19 +67,13 @@ export default function TekliTapuAnalizi() {
               : "cursor-pointer hover:border-brand-500 hover:bg-brand-50/50"
           }`}
         >
-          <Upload className="mb-3 h-12 w-12 text-slate-400" />
+          <Upload className="mb-3 h-10 w-10 text-slate-400" />
           <p className="text-sm font-medium text-slate-700">
-            Yalnızca PDF dosyası yükleyin
+            PDF dosyasını seçin veya sürükleyin
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Çok sayfalı tapu belgeleri desteklenir
+            Tüm sayfalar okunur → ücretsiz metin analizi ile takyidat raporu
           </p>
-          {fileName && (
-            <p className="mt-4 flex items-center gap-2 rounded-md bg-white px-3 py-2 text-sm text-brand-700 shadow-sm">
-              <FileText className="h-4 w-4" />
-              {fileName}
-            </p>
-          )}
         </div>
         <input
           ref={inputRef}
@@ -87,18 +83,24 @@ export default function TekliTapuAnalizi() {
           disabled={loading}
           onChange={handleFileChange}
         />
+
+        {fileName && (
+          <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <FileText className="h-4 w-4 shrink-0" />
+            <span className="truncate">{fileName}</span>
+          </div>
+        )}
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900">
-          <FileText className="h-5 w-5 text-brand-600" />
-          Takyidat Raporu
+        <h2 className="mb-4 text-lg font-semibold text-slate-900">
+          Takyidat Analiz Raporu
         </h2>
         <AnalizSonucPanel
           loading={loading}
           error={error}
           sonuc={sonuc}
-          emptyMessage="Analiz sonuçları burada görünecek. Sol taraftan bir tapu PDF dosyası yükleyin."
+          emptyMessage="Sol taraftan tapu PDF yükleyin. Beyan, şerh, hak/mükellefiyet ve ipotek özeti burada görünecek."
         />
       </section>
     </div>

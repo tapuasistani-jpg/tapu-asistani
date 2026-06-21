@@ -21,7 +21,7 @@ export default function AnalizSonucPanel({
       <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
         <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
         <p className="text-sm text-slate-600">
-          PDF okunuyor ve gpt-4o ile takyidat raporu hazırlanıyor…
+          PDF okunuyor ve takyidat raporu hazırlanıyor…
         </p>
       </div>
     );

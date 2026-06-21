@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { extractTextFromPdfBuffer } from "@/lib/extract-pdf-text";
 import { isPdfFile, PDF_ONLY_MESSAGE } from "@/lib/file-types";
-import { analyzePortfoyWithGpt } from "@/lib/openai-portfoy";
+import { analyzePortfoyYerel } from "@/lib/tapu-metin-parser";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       })
     );
 
-    const sonuc = await analyzePortfoyWithGpt(belgeler);
+    const sonuc = analyzePortfoyYerel(belgeler);
 
     return NextResponse.json(sonuc);
   } catch (error) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { extractTextFromPdfBuffer } from "@/lib/extract-pdf-text";
 import { isPdfFile, PDF_ONLY_MESSAGE } from "@/lib/file-types";
-import { analyzeTapuTextWithGpt } from "@/lib/openai-tapu";
+import { analyzeTapuTextYerel } from "@/lib/tapu-metin-parser";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const tapuMetni = await extractTextFromPdfBuffer(buffer);
-    const sonuc = await analyzeTapuTextWithGpt(tapuMetni);
+    const sonuc = analyzeTapuTextYerel(tapuMetni);
 
     return NextResponse.json(sonuc);
   } catch (error) {
