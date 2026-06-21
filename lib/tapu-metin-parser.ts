@@ -11,6 +11,13 @@ import {
   type TapuCikarimVerisi,
 } from "./tapu-rapor-sablon";
 import type { PortfoyBelgeGirdisi } from "./openai-portfoy";
+import {
+  extractWebTapuBelgeTarihSaat,
+  isWebTapuKayitBelgesi,
+  parseWebTapuRehin,
+  parseWebTapuSbi,
+  stripWebTapuFooters,
+} from "./web-tapu-parser";
 
 type SectionKey =
   | "beyan"
@@ -228,6 +235,9 @@ function extractTutar(metin: string): string {
 
   const plainAmount = metin.matchAll(/\b(\d{4,}(?:,\d{2})?)\b/g);
   for (const m of plainAmount) {
+    const idx = m.index ?? 0;
+    const before = metin.slice(Math.max(0, idx - 8), idx);
+    if (/VKN:\s*$/i.test(before) || /\(SN:\d*\)$/i.test(before)) continue;
     const value = parseTlNumeric(m[1]);
     if (value >= 1000) candidates.push({ raw: m[1], value });
   }
@@ -558,7 +568,24 @@ function parseRehinSection(sectionText: string): RehinKaydi[] {
 }
 
 export function parseTapuMetni(metin: string): TapuCikarimVerisi {
-  const normalized = normalizeMetin(metin);
+  const cleaned = stripWebTapuFooters(normalizeMetin(metin));
+
+  if (isWebTapuKayitBelgesi(cleaned)) {
+    const { tarih, saat } = extractWebTapuBelgeTarihSaat(cleaned);
+    const sbi = parseWebTapuSbi(cleaned);
+    const rehinMaddeleri = parseWebTapuRehin(cleaned);
+
+    return {
+      belgeTarihi: tarih,
+      belgeSaati: saat,
+      beyanMaddeleri: sbi.beyanMaddeleri,
+      serhMaddeleri: sbi.serhMaddeleri,
+      hakVeMukellefiyetMaddeleri: sbi.hakVeMukellefiyetMaddeleri,
+      rehinMaddeleri,
+    };
+  }
+
+  const normalized = cleaned;
   const { tarih, saat } = extractBelgeTarihSaat(normalized);
   const sections = splitSections(normalized);
 
